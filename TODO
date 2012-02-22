@@ -8,3 +8,5 @@
  * Make it possible when using VIAF and if there are multiple hits, to add the
    hits in an XML comment so that cataloger may choose the correct heading (if
    any. 
+
+ * Add a flag to ignore the cache
