@@ -104,7 +104,10 @@ def query_viaf(name, type, accept=RSS_XML):
 	(uri, label) 2-tuples that can be logged or commented into the data for
 	human review.
 	
-	@raise HeadingNotFoundException: when no headings are found. 
+	@raise HeadingNotFoundException: when no headings are found.
+	
+	@raise Exception: when something else goes wrong. Prefer to handle these
+	at a higher level. 
 	"""
 	q = 'local.' + type + 'Names+%3D+"' + name + '"+and+local.sources+any+"lc"'
 	headers = {'Accept': accept}
@@ -128,26 +131,35 @@ def query_viaf(name, type, accept=RSS_XML):
 			msg = "Not found " + name + os.linesep
 			raise HeadingNotFoundException(msg)	
 		elif count > 1:
-			# We make a list of (uri, authform ) two-tuples that the exception
-			# can report.
-			msg = "Multiple matches for " + name
-			items = []
-			for item in ctxt.xpathEval("//item"):
-				uri = ""
-				authform = ""
-				for child in item.children:
-					if child.type == "element":
-						if child.name == "title":
-							authform = child.content 
-						elif child.name == "link":
-							uri = child.content
-						else: pass
-				items.append((uri, authform))
-			raise MultipleMatchesException(name, type, items)
+			# check for an exact match, we'll return that
+			# (if count is 1, casts to True)
+			if bool(ctxt.xpathEval("count(//title[. = '"+name+"'])")): 
+				label = ctxt.xpathEval("//title[. = '"+name+"']")[0].content
+				uri = ctxt.xpathEval("//item[title[. = '"+name+"']]/link")[0].content
+				return (uri, label)
+			else:
+				# We make a list of (uri, authform ) two-tuples that the 
+				# exception can report.
+				msg = "Multiple matches for " + name
+				items = []
+				for item in ctxt.xpathEval("//item"):
+					uri = ""
+					authform = ""
+					for child in item.children:
+						if child.type == "element":
+							if child.name == "title":
+								authform = child.content 
+							elif child.name == "link":
+								uri = child.content
+							else: pass
+					items.append((uri, authform))
+				raise MultipleMatchesException(name, type, items)
 		else:
 			raise Exception("Could not retrieve count (" + name + ")")
-	except Exception as e:
-		raise e
+		
+#	except Exception as e:
+#		raise e
+	
  	finally:
 		# clean up!
 		if ctxt != None: ctxt.xpathFreeContext()
@@ -227,7 +239,6 @@ def update_headings(type, ctxt, shelf, callno="", recursive=False, annotate=Fals
 			
 			# Check the shelf right off
 			if heading in shelf and shelf.get(heading).type == type:
-				print "Here for " + heading
 				cached = shelf[heading]
 				if len(cached.alternatives) == 1: 
 					uri = cached.alternatives[0][0]
