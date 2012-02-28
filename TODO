@@ -1,12 +1,8 @@
- * Add -r / --recursive option that makes the script analyze the entire tree
-   rather then just the high did (high did only should be the default)
-
- * Add [some option] to try to get names from VIAF instead of NAF
-
- * Cache when a heading is not found to avoid multiple hits to the web service
-
- * Make it possible when using VIAF and if there are multiple hits, to add the
-   hits in an XML comment so that cataloger may choose the correct heading (if
-   any. 
-
  * Add a flag to ignore the cache
+ 
+ * BSD statuses
+ 
+ * move XPaths into a class of constants, e.g. XPaths.NAMES_RECURSIVE. Pass
+   these as args instead of type=NAME, etc.
+
+
