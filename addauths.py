@@ -47,10 +47,12 @@ class UnexpectedResponseException(Exception): pass
 class MultipleMatchesException(Exception):
 	def __init__(self, heading, type, items):
 		"""
+		@param heading: The heading we were searching when this was raised
+		@param type: The type of heading (personal or corporate)  
 		@param items: A list of 2-tuple (uri, label) possibilities
 		"""
-		self.heading = items
-		self.type = items
+		self.heading = heading
+		self.type = type
 		self.items = items
 
 #===============================================================================
@@ -68,6 +70,33 @@ class Heading(object):
 		self.alternatives = ""
 
 #===============================================================================
+# XPaths
+#===============================================================================
+class XPaths(object):
+	"""
+	Constants for getting at the relevant parts of the EAD doc.
+	"""
+	NAMES = "/ead:ead/ead:archdesc/ead:controlaccess/ead:corpname" + \
+				"[not(@authfilenumber)]|" + \
+		"/ead:ead/ead:archdesc/ead:controlaccess/ead:famname" + \
+			"[not(@authfilenumber)]|" + \
+		"/ead:ead/ead:archdesc/ead:controlaccess/ead:persname" + \
+			"[not(@authfilenumber)]|" + \
+		"/ead:ead/ead:archdesc/ead:did/ead:origination/*" + \
+			"[not(@authfilenumber)]"
+			
+	NAMES_RECURSIVE = "//ead:corpname[not(@authfilenumber)]|" + \
+					"//ead:famname[not(@authfilenumber)]|" + \
+					"//ead:persname[not(@authfilenumber)]|" + \
+					"//ead:origination/*[not(@authfilenumber)]"
+				
+	SUBJECTS = "//ead:archdesc/ead:controlaccess/ead:subject" + \
+					"[not(@source = 'local') and not(@authfilenumber)]"
+	
+	SUBJECTS_RECURSIVE = "//ead:subject" + \
+							"[not(@source = 'local') and not(@authfilenumber)]"
+
+#===============================================================================
 # _normalize_heading
 #===============================================================================
 def _normalize_heading(heading):
@@ -76,8 +105,8 @@ def _normalize_heading(heading):
 	@param heading: A heading from the source data.
 	@return: A normalized version of the heading.
 	 
-	@note: 	Other users may need to modify or extend this function. This v
-	ersion, in order:
+	@note: 	Other users may need to modify or extend this function. This
+	version, in order:
 	 1. collapeses whitespace
 	 2. strips spaces that trail or follow hyphens ("-")
 	 3. strips trailing stops (".")
@@ -132,10 +161,10 @@ def query_viaf(name, type, accept=RSS_XML):
 			raise HeadingNotFoundException(msg)	
 		elif count > 1:
 			# check for an exact match, we'll return that
-			# (if count is 1, casts to True)
-			if bool(ctxt.xpathEval("count(//title[. = '"+name+"'])")): 
-				label = ctxt.xpathEval("//title[. = '"+name+"']")[0].content
-				uri = ctxt.xpathEval("//item[title[. = '"+name+"']]/link")[0].content
+			if bool(ctxt.xpathEval("count(//title[. = '" + name + "'])")):
+				# (re. above magic: if count is 1, casts to True) 
+				label = ctxt.xpathEval("//title[. = '" + name + "']")[0].content
+				uri = ctxt.xpathEval("//item[title[. = '" + name + "']]/link")[0].content
 				return (uri, label)
 			else:
 				# We make a list of (uri, authform ) two-tuples that the 
@@ -156,9 +185,6 @@ def query_viaf(name, type, accept=RSS_XML):
 				raise MultipleMatchesException(name, type, items)
 		else:
 			raise Exception("Could not retrieve count (" + name + ")")
-		
-#	except Exception as e:
-#		raise e
 	
  	finally:
 		# clean up!
@@ -182,8 +208,6 @@ def query_lc(subject):
 	to_get = ID_SUBJECT_RESOLVER + subject
 	headers = {"Accept":"application/xml"}
 	resp = requests.get(to_get, headers=headers, allow_redirects=True)
-	
-#	try: # if loc will change the 302 to include x-preflabel we can set allow_redirects to False and below to 302 
 	if resp.status_code == 200:
 		uri = resp.headers["x-uri"]
 		label = resp.headers["x-preflabel"]
@@ -192,47 +216,24 @@ def query_lc(subject):
 		msg = "Not found " + subject + os.linesep
 		raise HeadingNotFoundException(msg)
 	else: # resp.status_code != 404 and status != 200:
-		if callno: msg = "(" + callno + "): "
-		else: msg = ""
-		msg += " Response for \"" + subject + "\" was " + \
-			resp.status_code + os.linesep
+		msg = " Response for \"" + subject + "\" was "
+		msg += resp.status_code + os.linesep
 		raise UnexpectedResponseException(msg)
-#	except:
-#		raise
 
+#===============================================================================
+# _pers_or_corp_from_node
+#===============================================================================
 def _pers_or_corp_from_node(node):
+	# TODO: make sure that node.get_name() returns the local name, and not, 
+	# e.g. ead:corpname when there is a namespace prefix
 	if node.get_name() == "corpname": return CORPORATE
 	else: return PERSONAL
 	
 #===============================================================================
 # update_headings
 #===============================================================================
-def update_headings(type, ctxt, shelf, callno="", recursive=False, annotate=False):
+def update_headings(xpath, ctxt, shelf, annotate=False):
 	
-	if type == NAME and not recursive:
-		xpath = "/ead:ead/ead:archdesc/ead:controlaccess/ead:corpname" + \
-					"[not(@authfilenumber)]|" + \
-				"/ead:ead/ead:archdesc/ead:controlaccess/ead:famname" + \
-					"[not(@authfilenumber)]|" + \
-				"/ead:ead/ead:archdesc/ead:controlaccess/ead:persname" + \
-					"[not(@authfilenumber)]|" + \
-				"/ead:ead/ead:archdesc/ead:did/ead:origination/*" + \
-					"[not(@authfilenumber)]"
-	elif type == NAME and recursive:
-		xpath = "//ead:corpname[not(@authfilenumber)]|" + \
-				"//ead:famname[not(@authfilenumber)]|" + \
-				"//ead:persname[not(@authfilenumber)]|" + \
-				"//ead:origination/*[not(@authfilenumber)]"
-				
-	elif type == SUBJECT and not recursive:
-		xpath = "//ead:archdesc/ead:controlaccess/ead:subject" + \
-					"[not(@source = 'local') and not(@authfilenumber)]"
-	elif type == SUBJECT and recursive:
-		xpath = "//ead:subject[not(@source = 'local') and not(@authfilenumber)]"				
-	else:
-		raise ValueError("Unknown type of heading. Must be one of " + \
-			"(\"name\", \"subject\"). Supplied: \"" + type + "\"")
-		
 	for node in ctxt.xpathEval(xpath):
 		try:
 			heading = _normalize_heading(node.content)
@@ -249,15 +250,14 @@ def update_headings(type, ctxt, shelf, callno="", recursive=False, annotate=Fals
 						commentContent += alt[0] + " : " + alt[1] + os.linesep 
 					comment = libxml2.newComment(commentContent)
 					node.addNextSibling(comment)
-			
 			else:
-				if type == NAME:
-					uri, auth = query_viaf(heading, _pers_or_corp_from_node(node))
-					node.setProp("authfilenumber", uri)
-				else: # type == SUBJECT; We've already checked values when choosing XPaths
+				if node.get_name() == "subject":
 					uri, auth = query_lc(heading)
 					node.setProp("authfilenumber", uri)
-					
+				else:
+					uri, auth = query_viaf(heading, _pers_or_corp_from_node(node))
+					node.setProp("authfilenumber", uri)
+
 				# we put the heading we found in the db
 				record = Heading()
 				record.value = heading
@@ -287,34 +287,51 @@ def update_headings(type, ctxt, shelf, callno="", recursive=False, annotate=Fals
 			record.found = True
 			record.alternatives = m.items
 			shelf[heading] = record
-			
-#		except:
-#			raise
 		
 class CLI(object):
+	EX_OK = 0
+	"""All good"""
+
+	EX_SOMETHING_ELSE = 9 
+	"""Something unanticipated went wrong"""
+		
+	EX_WRONG_USAGE = 64
+	"""The command was used incorrectly, e.g., with the wrong number of 
+	arguments, a bad flag, a bad syntax in a parameter, or whatever.""" 
+
+	EX_DATA_ERR = 65
+	"""The input data was incorrect in some way."""
+		
+	EX_NO_INPUT = 66
+	"""Input file (not a system file) did not exist or was not readable."""
+		
+	EX_CANT_CREATE = 73
+	"""User specified output file cannot be created."""
+	
+	EX_IOERR = 74
+	"""An error occurred while doing I/O on some file."""
+		
 	def __init__(self):
-		desc = "Adds id.loc.gov URIs to subject headings and/or VIAF URIs to name " + \
-				 "headings when established forms can be found."
+		desc = "Adds id.loc.gov URIs to subject headings and VIAF URIs to " + \
+				"name headings when established forms can be found."
 		
-		epi = "Exit status codes: 0 OK; 1 The input file or ouput directory (if -o) doesn't exist; 9: Something else went wrong\r\n"
+		# TODO:
+		epi = "TODO. See EX_* constants in CLI class for now."
 	
-		oHelp = "Path to the output file. Writes to stdout if no option is supplied."
+		oHelp = "Path to the output file. Writes to stdout if no option " + \
+			"is supplied."
 		
-		rHelp = "Recurse through the dsc. By default only the archdesc is treated."
+		rHelp = "Recurse through the dsc. By default only the archdesc " + \
+			"is treated."
 		
-		nHelp = "Link names."
+		nHelp = "Try to find URIs for names."
 		
-		sHelp = "Link subjects."
+		sHelp = "Try to find URIs for subjects."
 	
-		AHelp = "Annotate the record. When multiple matches are found XML comments" + \
-			"containing the matches and their URIs will be added to the " + \
-			"record."
-	
-		too_many = "Too many arguments supplied. Please supply the path " + \
-					"to an EAD record."
-		not_enough = "Not enough arguments supplied. Please supply the path " + \
-					"to an EAD record."
-		
+		AHelp = "Annotate the record. When multiple matches are found XML " + \
+			"comments containing the matches and their URIs will be added " + \
+			"to the record."
+
 		parser = ArgumentParser(description=desc, epilog=epi)
 		parser.add_argument("-o", "--output", default=None, required=False, dest="outpath", help=oHelp)
 		parser.add_argument("-r", "--recursive", default=False, required=False, dest="recursive", action="store_true", help=rHelp)
@@ -323,57 +340,77 @@ class CLI(object):
 		parser.add_argument("-a", "--annotate", default=False, required=False, dest="annotate", action="store_true", help=AHelp)
 		parser.add_argument("record", default=None)
 		args = parser.parse_args()
-		
+
 		 # catch if input file does not exist
 		if not os.path.exists(args.record):
 			os.sys.stderr.write("File " + args.record + " does not exist\n")
-			exit(1)
-		
+			exit(CLI.EX_NO_INPUT)
+			
+		if args.record == None:
+			os.sys.stderr.write("No input file supplied. See --help for usage")
+			exit(CLI.EX_WRONG_USAGE)
+			
 		# catch if -o and output dir does not exist
 		if args.outpath:
 			outdir = os.path.dirname(args.outpath)
+			if not os.access(outdir, os.W_OK):
+				msg = "Output directory " + outdir + " not writable\n"
+				os.sys.stderr.write(msg) 
+				exit(CLI.EX_CANT_CREATE)
 			if not os.path.exists(outdir):
-				os.sys.stderr.write("Directory " + outdir + " does not exist\n") 
-				exit(1)
-		
+				msg = "Directory " + outdir + " does not exist\n"
+				os.sys.stderr.write(msg) 
+				exit(CLI.EX_CANT_CREATE)
+
 		shelf = shelve.open(SHELF_FILE, protocol=pickle.HIGHEST_PROTOCOL)
-			
+
+		doc = None
+		ctxt = None
 		try:
 			doc = libxml2.parseFile(args.record)
 			ctxt = doc.xpathNewContext()
 			for ns in NAMESPACES.keys():
 				ctxt.xpathRegisterNs(ns, NAMESPACES[ns])
-			
-			callno = ctxt.xpathEval("//ead:eadid")[0].content
-			
+
 			if not args.names and not args.subjects:
-				status = 64
-				raise Exception("Supply -n and or -s to link headings. Use --help for more details.")
-			
+				status = CLI.EX_WRONG_USAGE
+				msg = "Supply -n and or -s to link headings. Use --help " + \
+				"for more details."
+				raise Exception(msg)
+					
 			if args.subjects:
-				update_headings(SUBJECT, ctxt, shelf, callno=callno, recursive=args.recursive, annotate=args.annotate)
+				if args.recursive: xpath = XPaths.SUBJECTS_RECURSIVE
+				else: xpath = XPaths.SUBJECTS	
+				update_headings(xpath, ctxt, shelf, annotate=args.annotate)
 			if args.names:
-				update_headings(NAME, ctxt, shelf, callno=callno, recursive=args.recursive, annotate=args.annotate)
-			
+				if args.recursive: xpath = XPaths.NAMES_RECURSIVE
+				else: xpath = XPaths.NAMES	
+				update_headings(xpath, ctxt, shelf, annotate=args.annotate)
+
 			if args.outpath == None:
 				os.sys.stdout.write(doc.serialize("UTF-8", 1))
 			else:
-	#			doc.saveFileEnc()
 				doc.saveFormatFileEnc(args.outpath, "UTF-8", 1)
-			status = 0
-		except UnicodeEncodeError, e:
+			status = CLI.EX_OK
+
+		except libxml2.parserError, e:
 			os.sys.stderr.write(str(e) + "\n")
+			status = CLI.EX_DATA_ERR
+
+		except IOError, e:
+			os.sys.stderr.write(str(e) + "\n")
+			status = CLI.EX_IOERR
+			
 		except Exception, e:
 			os.sys.stderr.write(str(e) + "\n")
-			status = 9
+			status = CLI.EX_SOMETHING_ELSE
 		
 		finally:
 			# clean up!
 			shelf.close()
-			ctxt.xpathFreeContext()
-			doc.freeDoc()
+			if ctxt != None: ctxt.xpathFreeContext()
+			if doc != None: doc.freeDoc()
 			exit(status)
 		 
 
-if __name__ == "__main__":
-	CLI()
+if __name__ == "__main__": CLI()

@@ -1,10 +1,11 @@
- * Add a flag to ignore the cache
+ * Add a flag to ignore the cache (-C, --ignore-cache)
  
- * BSD statuses
- 
- * move XPaths into a class of constants, e.g. XPaths.NAMES_RECURSIVE. Pass
-   these as args instead of type=NAME, etc.
-   
  * CLI config file?
+ 
+ * Make sure we're not passing around type strings any more and delete them
+ 
+ * Exit statuses to --help
+
+   
 
 
