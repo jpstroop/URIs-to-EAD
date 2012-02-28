@@ -22,22 +22,11 @@ NAMESPACES = {
 	"srw":"http://www.loc.gov/zing/srw/"
 }
 
-
-NAME = "name"
-SUBJECT = "subject"
-CORPORATE = "corporate"
-PERSONAL = "personal"
-
-MADS_NAME_SCHEME_URI = "http://id.loc.gov/authorities/names"
-MADS_SUBJECT_SCHEME_URI = "http://id.loc.gov/authorities/subjects"
-
 ID_SUBJECT_RESOLVER = "http://id.loc.gov/vocabulary/subject/label/"
 VIAF_SEARCH = "http://viaf.org/viaf/search"
-
 RSS_XML = "application/rss+xml" 
 APPLICATION_XML = "application/xml"
-
-SHELF_FILE = "cache.shelf"
+SHELF_FILE = "cache.db"
 
 class HeadingNotFoundException(Exception): pass
 class UnexpectedResponseException(Exception): pass
@@ -59,15 +48,17 @@ class MultipleMatchesException(Exception):
 # Heading
 #===============================================================================
 class Heading(object):
+	CORPORATE = "corporate"
+	PERSONAL = "personal"
 	def __init__(self):
-		"Heading label (string) normalized from the source data"
 		self.value = ""
-		"'name' or 'subject'"
+		"""Heading label (string) normalized from the source data"""
 		self.type = ""
-		"boolean, True if one or more URIs was found"
+		"""'corporate', 'personal', or 'subject'"""
 		self.found = ""
-		"A list of 2-tuple (uri, label) possibilities"
+		"""boolean, True if one or more URIs was found"""
 		self.alternatives = ""
+		""""A list of 2-tuple (uri, label) possibilities"""
 
 #===============================================================================
 # XPaths
@@ -124,7 +115,7 @@ def _normalize_heading(heading):
 def query_viaf(name, type, accept=RSS_XML):
 	"""
 	@param name: name to look for in VIAF 
-	@param type: "personal" or "corporate"
+	@param type: Heading.PERSONAL or Heading.CORPORATE
 	@param accept: MIME type for accept header
 	@return: A 2-tuple (uri, label)
 	
@@ -136,7 +127,7 @@ def query_viaf(name, type, accept=RSS_XML):
 	@raise HeadingNotFoundException: when no headings are found.
 	
 	@raise Exception: when something else goes wrong. Prefer to handle these
-	at a higher level. 
+	at a higher level.
 	"""
 	q = 'local.' + type + 'Names+%3D+"' + name + '"+and+local.sources+any+"lc"'
 	headers = {'Accept': accept}
@@ -161,8 +152,8 @@ def query_viaf(name, type, accept=RSS_XML):
 			raise HeadingNotFoundException(msg)	
 		elif count > 1:
 			# check for an exact match, we'll return that
-			if bool(ctxt.xpathEval("count(//title[. = '" + name + "'])")):
-				# (re. above magic: if count is 1, casts to True) 
+			if int(ctxt.xpathEval("count(//title[. = '" + name + "'])")) == 1:
+				# (re. above magic: if count of titles with exactly our name is 1) 
 				label = ctxt.xpathEval("//title[. = '" + name + "']")[0].content
 				uri = ctxt.xpathEval("//item[title[. = '" + name + "']]/link")[0].content
 				return (uri, label)
@@ -226,14 +217,13 @@ def query_lc(subject):
 def _pers_or_corp_from_node(node):
 	# TODO: make sure that node.get_name() returns the local name, and not, 
 	# e.g. ead:corpname when there is a namespace prefix
-	if node.get_name() == "corpname": return CORPORATE
-	else: return PERSONAL
+	if node.get_name() == "corpname": return Heading.CORPORATE
+	else: return Heading.PERSONAL
 	
 #===============================================================================
 # update_headings
 #===============================================================================
-def update_headings(xpath, ctxt, shelf, annotate=False):
-	
+def _update_headings(xpath, ctxt, shelf, annotate=False):
 	for node in ctxt.xpathEval(xpath):
 		try:
 			heading = _normalize_heading(node.content)
@@ -341,29 +331,39 @@ class CLI(object):
 		parser.add_argument("record", default=None)
 		args = parser.parse_args()
 
-		 # catch if input file does not exist
+		#=======================================================================
+		# Checks on our args and options. We can exit before we do any work.
+		#=======================================================================
 		if not os.path.exists(args.record):
 			os.sys.stderr.write("File " + args.record + " does not exist\n")
 			exit(CLI.EX_NO_INPUT)
 			
 		if args.record == None:
-			os.sys.stderr.write("No input file supplied. See --help for usage")
+			os.sys.stderr.write("No input file supplied. See --help for usage\n")
 			exit(CLI.EX_WRONG_USAGE)
-			
-		# catch if -o and output dir does not exist
+	
+		if not args.names and not args.subjects:
+			msg = "Supply -n and or -s to link headings. Use --help " + \
+			"for more details.\n"
+			os.sys.stderr.write(msq)
+			exit(CLI.EX_WRONG_USAGE)
+	
 		if args.outpath:
 			outdir = os.path.dirname(args.outpath)
+			if not os.path.exists(outdir):
+				msg = "Directory " + outdir + " does not exist\n"
+				os.sys.stderr.write(msg)
+				exit(CLI.EX_CANT_CREATE)
 			if not os.access(outdir, os.W_OK):
 				msg = "Output directory " + outdir + " not writable\n"
 				os.sys.stderr.write(msg) 
 				exit(CLI.EX_CANT_CREATE)
-			if not os.path.exists(outdir):
-				msg = "Directory " + outdir + " does not exist\n"
-				os.sys.stderr.write(msg) 
-				exit(CLI.EX_CANT_CREATE)
 
+
+		#=======================================================================
+		# The work...
+		#=======================================================================
 		shelf = shelve.open(SHELF_FILE, protocol=pickle.HIGHEST_PROTOCOL)
-
 		doc = None
 		ctxt = None
 		try:
@@ -372,37 +372,34 @@ class CLI(object):
 			for ns in NAMESPACES.keys():
 				ctxt.xpathRegisterNs(ns, NAMESPACES[ns])
 
-			if not args.names and not args.subjects:
-				status = CLI.EX_WRONG_USAGE
-				msg = "Supply -n and or -s to link headings. Use --help " + \
-				"for more details."
-				raise Exception(msg)
-					
 			if args.subjects:
 				if args.recursive: xpath = XPaths.SUBJECTS_RECURSIVE
 				else: xpath = XPaths.SUBJECTS	
-				update_headings(xpath, ctxt, shelf, annotate=args.annotate)
+				_update_headings(xpath, ctxt, shelf, annotate=args.annotate)
 			if args.names:
 				if args.recursive: xpath = XPaths.NAMES_RECURSIVE
 				else: xpath = XPaths.NAMES	
-				update_headings(xpath, ctxt, shelf, annotate=args.annotate)
-
+				_update_headings(xpath, ctxt, shelf, annotate=args.annotate)
 			if args.outpath == None:
 				os.sys.stdout.write(doc.serialize("UTF-8", 1))
 			else:
 				doc.saveFormatFileEnc(args.outpath, "UTF-8", 1)
+			# if we got here...
 			status = CLI.EX_OK
 
+		#=======================================================================
+		# Problems while doing "the work" are handled w/ Exceptions
+		#=======================================================================
 		except libxml2.parserError, e:
-			os.sys.stderr.write(str(e) + "\n")
+			os.sys.stderr.write(str(e.message) + "\n")
 			status = CLI.EX_DATA_ERR
 
 		except IOError, e:
-			os.sys.stderr.write(str(e) + "\n")
+			os.sys.stderr.write(str(e.message) + "\n")
 			status = CLI.EX_IOERR
 			
 		except Exception, e:
-			os.sys.stderr.write(str(e) + "\n")
+			os.sys.stderr.write(str(e.message) + "\n")
 			status = CLI.EX_SOMETHING_ELSE
 		
 		finally:
