@@ -4,6 +4,10 @@
  
  * Make sure we're not passing around type strings any more and delete them
  
+ * --log option for logging alternatives rather than annotation the file
+ 
+ * collections with the heading to cache
+ 
  * Exit statuses to --help
 
    
