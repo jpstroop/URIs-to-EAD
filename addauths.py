@@ -28,14 +28,28 @@ RSS_XML = "application/rss+xml"
 APPLICATION_XML = "application/xml"
 SHELF_FILE = "cache.db"
 
-class HeadingNotFoundException(Exception): pass
-class UnexpectedResponseException(Exception): pass
+#===============================================================================
+# HeadingNotFoundException
+#===============================================================================
+class HeadingNotFoundException(Exception):
+	def __init__(self, msg, heading, type):
+		super(HeadingNotFoundException, self).__init__(msg)
+		"""
+		@param msg: Message for logging
+		@param heading: The heading we were searching when this was raised
+		@param type: The type of heading (personal or corporate)  
+		"""
+		self.heading = heading
+		self.type = type
+
 #===============================================================================
 # MultipleMatchesException
 #===============================================================================
 class MultipleMatchesException(Exception):
-	def __init__(self, heading, type, items):
+	def __init__(self, msg, heading, type, items):
+		super(MultipleMatchesException, self).__init__(msg)
 		"""
+		@param msg: Message for logging
 		@param heading: The heading we were searching when this was raised
 		@param type: The type of heading (personal or corporate)  
 		@param items: A list of 2-tuple (uri, label) possibilities
@@ -45,11 +59,18 @@ class MultipleMatchesException(Exception):
 		self.items = items
 
 #===============================================================================
+# UnexpectedResponseException
+#===============================================================================
+# we throw when we get an enexpected (unhandled) HTTP response
+class UnexpectedResponseException(Exception): pass
+
+#===============================================================================
 # Heading
 #===============================================================================
 class Heading(object):
 	CORPORATE = "corporate"
 	PERSONAL = "personal"
+	SUBJECT = "subject"
 	def __init__(self):
 		self.value = ""
 		"""Heading label (string) normalized from the source data"""
@@ -59,6 +80,12 @@ class Heading(object):
 		"""boolean, True if one or more URIs was found"""
 		self.alternatives = ""
 		""""A list of 2-tuple (uri, label) possibilities"""
+	@staticmethod	
+	def pers_or_corp_from_node(node):
+		# TODO: make sure that node.get_name() returns the local name, and not, 
+		# e.g. ead:corpname when there is a namespace prefix
+		if node.get_name() == "corpname": return Heading.CORPORATE
+		else: return Heading.PERSONAL
 
 #===============================================================================
 # XPaths
@@ -136,7 +163,8 @@ def query_viaf(name, type, accept=RSS_XML):
 	ctxt = None
 	doc = None
 	try:
-		doc = libxml2.parseDoc(resp.text.encode("UTF-8"))
+		doc = libxml2.parseDoc(resp.text.encode("UTF-8", errors="ignore"))
+		
 		ctxt = doc.xpathNewContext()
 		for ns in NAMESPACES.keys():
 			ctxt.xpathRegisterNs(ns, NAMESPACES[ns])
@@ -148,8 +176,8 @@ def query_viaf(name, type, accept=RSS_XML):
 			label = ctxt.xpathEval("//title[parent::item]")[0].content
 			return (uri, label)
 		elif count == 0:
-			msg = "Not found " + name + os.linesep
-			raise HeadingNotFoundException(msg)	
+			msg = "Not found: " + name + os.linesep
+			raise HeadingNotFoundException(msg, name, type)	
 		elif count > 1:
 			# check for an exact match, we'll return that
 			if int(ctxt.xpathEval("count(//title[. = '" + name + "'])")) == 1:
@@ -160,7 +188,7 @@ def query_viaf(name, type, accept=RSS_XML):
 			else:
 				# We make a list of (uri, authform ) two-tuples that the 
 				# exception can report.
-				msg = "Multiple matches for " + name
+				msg = "Multiple matches for " + name + "\n"
 				items = []
 				for item in ctxt.xpathEval("//item"):
 					uri = ""
@@ -173,7 +201,7 @@ def query_viaf(name, type, accept=RSS_XML):
 								uri = child.content
 							else: pass
 					items.append((uri, authform))
-				raise MultipleMatchesException(name, type, items)
+				raise MultipleMatchesException(msg, name, type, items)
 		else:
 			raise Exception("Could not retrieve count (" + name + ")")
 	
@@ -204,48 +232,52 @@ def query_lc(subject):
 		label = resp.headers["x-preflabel"]
 		return uri, label
 	elif resp.status_code == 404:
-		msg = "Not found " + subject + os.linesep
-		raise HeadingNotFoundException(msg)
+		msg = "Not found: " + subject + os.linesep
+		raise HeadingNotFoundException(msg, subject, Heading.SUBJECT)
 	else: # resp.status_code != 404 and status != 200:
 		msg = " Response for \"" + subject + "\" was "
 		msg += resp.status_code + os.linesep
 		raise UnexpectedResponseException(msg)
 
 #===============================================================================
-# _pers_or_corp_from_node
-#===============================================================================
-def _pers_or_corp_from_node(node):
-	# TODO: make sure that node.get_name() returns the local name, and not, 
-	# e.g. ead:corpname when there is a namespace prefix
-	if node.get_name() == "corpname": return Heading.CORPORATE
-	else: return Heading.PERSONAL
-	
-#===============================================================================
 # update_headings
 #===============================================================================
-def _update_headings(xpath, ctxt, shelf, annotate=False):
+def _update_headings(xpath, ctxt, shelf, annotate=False, verbose=False):
 	for node in ctxt.xpathEval(xpath):
 		try:
 			heading = _normalize_heading(node.content)
 			
+			element_name = node.get_name()
+			heading_type = ""
+			if element_name == Heading.SUBJECT: heading_type = Heading.SUBJECT
+			elif element_name == "corpname":  heading_type = Heading.CORPORATE
+			else: heading_type == Heading.PERSONAL
+				
 			# Check the shelf right off
-			if heading in shelf and shelf.get(heading).type == type:
+			if heading in shelf:
 				cached = shelf[heading]
-				if len(cached.alternatives) == 1: 
+				if len(cached.alternatives) == 1:
+					# we only get here if no exceptions above 
+					if verbose:	os.sys.stdout.write("[Cache] Found: " + heading + "\n") 
 					uri = cached.alternatives[0][0]
 					node.setProp("authfilenumber", uri)
-				elif len(cached.alternatives) > 1 and annotate:
-					commentContent = os.linesep + "Possible URIs:" + os.linesep
-					for alt in cached.alternatives:
-						commentContent += alt[0] + " : " + alt[1] + os.linesep 
-					comment = libxml2.newComment(commentContent)
-					node.addNextSibling(comment)
+				elif len(cached.alternatives) > 1:
+					msg = "[Cache] Multiple matches for " + heading + "\n"
+					raise MultipleMatchesException(msg, heading, heading_type, cached.alternatives)
+				else: # 0 
+					msg = "[Cache] Not found: " + heading + "\n"
+					raise HeadingNotFoundException(msg, heading, heading_type)
 			else:
-				if node.get_name() == "subject":
+				if heading_type == Heading.SUBJECT:
 					uri, auth = query_lc(heading)
+					# we only get here if no exceptions above 
+					if verbose:	os.sys.stdout.write("Found: " + heading + "\n")
 					node.setProp("authfilenumber", uri)
+					
 				else:
-					uri, auth = query_viaf(heading, _pers_or_corp_from_node(node))
+					uri, auth = query_viaf(heading, Heading.pers_or_corp_from_node(node))
+					# we only get here if no exceptions above 
+					if verbose:	os.sys.stdout.write("Found: " + heading + "\n")
 					node.setProp("authfilenumber", uri)
 
 				# we put the heading we found in the db
@@ -256,27 +288,55 @@ def _update_headings(xpath, ctxt, shelf, annotate=False):
 				record.alternatives = [(uri, auth)]
 				shelf[heading] = record
 
+				node.setProp("authfilenumber", uri)
+				
 				sleep(1) # A courtesy to the services.
-			
-			node.setProp("authfilenumber", uri)
-		
-		except (HeadingNotFoundException, UnexpectedResponseException), e:
+
+		except UnexpectedResponseException, e:
 			os.sys.stderr.write(str(e))
 		
+		except HeadingNotFoundException, e:
+			if verbose:
+				os.sys.stderr.write(str(e))
+			if not heading in shelf:
+				# We still want to put this in the db
+				record = Heading()
+				record.value = e.heading
+				record.type = e.type
+				record.found = False
+				record.alternatives = []
+				shelf[heading] = record
+		
 		except MultipleMatchesException, m:
+			if verbose:
+				os.sys.stderr.write(str(m)) 
 			if annotate:
 				content = os.linesep + "Possible URIs:" + os.linesep
 				for alt in m.items:
 					content += alt[0] + " : " + alt[1] + os.linesep 
 				comment = libxml2.newComment(content)
 				node.addNextSibling(comment)
-			# We still want to put this in the db
+			if not heading in shelf:
+				# We still want to put this in the db
+				record = Heading()
+				record.value = m.heading
+				record.type = m.type
+				record.found = True
+				record.alternatives = m.items
+				shelf[heading] = record
+
+		except LookupError, e:
 			record = Heading()
-			record.value = m.heading
-			record.type = m.type
+			record.value = heading
+			record.type = heading_type
 			record.found = True
-			record.alternatives = m.items
+			record.alternatives = []
 			shelf[heading] = record
+			e.message = "Error: " + e.message + " This is realted to VIAF sending data " + \
+			" for \"" + heading + "\" that we can't parse. \nThis has been " + \
+			"been noted in the cache and this heading will ignored in the " + \
+			"future. Run again.\n" 
+			raise e
 		
 class CLI(object):
 	EX_OK = 0
@@ -294,7 +354,10 @@ class CLI(object):
 		
 	EX_NO_INPUT = 66
 	"""Input file (not a system file) did not exist or was not readable."""
-		
+	
+	EX_SOFTWARE = 70
+	"""An internal software (not OS) error has been detected."""
+	
 	EX_CANT_CREATE = 73
 	"""User specified output file cannot be created."""
 	
@@ -302,6 +365,10 @@ class CLI(object):
 	"""An error occurred while doing I/O on some file."""
 		
 	def __init__(self):
+		
+		# start by assuming something will go wrong:
+		status = CLI.EX_SOMETHING_ELSE
+		
 		desc = "Adds id.loc.gov URIs to subject headings and VIAF URIs to " + \
 				"name headings when established forms can be found."
 		
@@ -318,16 +385,20 @@ class CLI(object):
 		
 		sHelp = "Try to find URIs for subjects."
 	
-		AHelp = "Annotate the record. When multiple matches are found XML " + \
+		aHelp = "Annotate the record. When multiple matches are found XML " + \
 			"comments containing the matches and their URIs will be added " + \
 			"to the record."
+			
+		vHelp = "Print messages to stdout (one-hit headings) and stderr " + \
+			"(zero or more than one hit headings)."
 
 		parser = ArgumentParser(description=desc, epilog=epi)
 		parser.add_argument("-o", "--output", default=None, required=False, dest="outpath", help=oHelp)
 		parser.add_argument("-r", "--recursive", default=False, required=False, dest="recursive", action="store_true", help=rHelp)
 		parser.add_argument("-n", "--names", default=False, required=False, dest="names", action="store_true", help=nHelp)
 		parser.add_argument("-s", "--subjects", default=False, required=False, dest="subjects", action="store_true", help=sHelp)
-		parser.add_argument("-a", "--annotate", default=False, required=False, dest="annotate", action="store_true", help=AHelp)
+		parser.add_argument("-a", "--annotate", default=False, required=False, dest="annotate", action="store_true", help=aHelp)
+		parser.add_argument("-v", "--verbose", default=False, required=False, dest="verbose", action="store_true", help=vHelp)
 		parser.add_argument("record", default=None)
 		args = parser.parse_args()
 
@@ -375,11 +446,11 @@ class CLI(object):
 			if args.subjects:
 				if args.recursive: xpath = XPaths.SUBJECTS_RECURSIVE
 				else: xpath = XPaths.SUBJECTS	
-				_update_headings(xpath, ctxt, shelf, annotate=args.annotate)
+				_update_headings(xpath, ctxt, shelf, annotate=args.annotate, verbose=args.verbose)
 			if args.names:
 				if args.recursive: xpath = XPaths.NAMES_RECURSIVE
 				else: xpath = XPaths.NAMES	
-				_update_headings(xpath, ctxt, shelf, annotate=args.annotate)
+				_update_headings(xpath, ctxt, shelf, annotate=args.annotate, verbose=args.verbose)
 			if args.outpath == None:
 				os.sys.stdout.write(doc.serialize("UTF-8", 1))
 			else:
@@ -397,7 +468,11 @@ class CLI(object):
 		except IOError, e:
 			os.sys.stderr.write(str(e.message) + "\n")
 			status = CLI.EX_IOERR
-			
+
+		except LookupError, e:
+			os.sys.stderr.write(str(e.message))
+			status = CLI.EX_SOFTWARE
+					
 		except Exception, e:
 			os.sys.stderr.write(str(e.message) + "\n")
 			status = CLI.EX_SOMETHING_ELSE
