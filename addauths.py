@@ -180,10 +180,11 @@ def query_viaf(name, type, accept=RSS_XML):
 			raise HeadingNotFoundException(msg, name, type)	
 		elif count > 1:
 			# check for an exact match, we'll return that
-			if int(ctxt.xpathEval("count(//title[. = '" + name + "'])")) == 1:
+			name4xpath = name.replace("'", "&apos;").replace('"', "&quot;")
+			if int(ctxt.xpathEval("count(//title[. = '" + name4xpath + "'])")) == 1:
 				# (re. above magic: if count of titles with exactly our name is 1) 
-				label = ctxt.xpathEval("//title[. = '" + name + "']")[0].content
-				uri = ctxt.xpathEval("//item[title[. = '" + name + "']]/link")[0].content
+				label = ctxt.xpathEval("//title[. = '" + name4xpath + "']")[0].content
+				uri = ctxt.xpathEval("//item[title[. = '" + name4xpath + "']]/link")[0].content
 				return (uri, label)
 			else:
 				# We make a list of (uri, authform ) two-tuples that the 
