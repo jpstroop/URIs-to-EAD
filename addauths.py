@@ -186,6 +186,12 @@ def query_viaf(name, type, accept=RSS_XML):
 				label = ctxt.xpathEval("//title[. = '" + name4xpath + "']")[0].content
 				uri = ctxt.xpathEval("//item[title[. = '" + name4xpath + "']]/link")[0].content
 				return (uri, label)
+			# try again with a stop appended.
+			elif int(ctxt.xpathEval("count(//title[. = '" + name4xpath + "." + "'])")) == 1:
+				# (re. above magic: if count of titles with exactly our name is 1) 
+				label = ctxt.xpathEval("//title[. = '" + name4xpath + "." + "']")[0].content
+				uri = ctxt.xpathEval("//item[title[. = '" + name4xpath + "." + "']]/link")[0].content
+				return (uri, label)
 			else:
 				# We make a list of (uri, authform ) two-tuples that the 
 				# exception can report.
@@ -314,7 +320,10 @@ def _update_headings(xpath, ctxt, shelf, annotate=False, verbose=False):
 			if annotate:
 				content = os.linesep + "Possible URIs:" + os.linesep
 				for alt in m.items:
-					content += alt[0] + " : " + alt[1] + os.linesep 
+					# we need to replace "--" in headings in comments so that the 
+					# the doc stays well-formed
+					content += alt[0].replace("--", "-\-") + " : " + \
+					alt[1].replace("--", "-\-") + os.linesep 
 				comment = libxml2.newComment(content)
 				node.addNextSibling(comment)
 			if not heading in shelf:
@@ -333,10 +342,10 @@ def _update_headings(xpath, ctxt, shelf, annotate=False, verbose=False):
 			record.found = True
 			record.alternatives = []
 			shelf[heading] = record
-			e.message = "Error: " + e.message + " This is realted to VIAF sending data " + \
-			" for \"" + heading + "\" that we can't parse. \nThis has been " + \
-			"been noted in the cache and this heading will ignored in the " + \
-			"future. Run again.\n" 
+			e.message = "Error: " + e.message + "\nThis is related to VIAF " + \
+			" sending data for\n\"" + heading + "\"\nthat we can't parse." +\
+			"\nThis has been been noted in the cache and this\nheading will" +\
+			" ignored in the future.\nRun again.\n"
 			raise e
 		
 class CLI(object):
@@ -417,7 +426,7 @@ class CLI(object):
 		if not args.names and not args.subjects:
 			msg = "Supply -n and or -s to link headings. Use --help " + \
 			"for more details.\n"
-			os.sys.stderr.write(msq)
+			os.sys.stderr.write(msg)
 			exit(CLI.EX_WRONG_USAGE)
 	
 		if args.outpath:

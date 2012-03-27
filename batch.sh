@@ -8,8 +8,7 @@ PYTHON=/usr/bin/python
 TMP_OUT=/tmp/out.xml
 XMLLINT=/usr/bin/xmllint
 MV=/bin/mv
-
-for record in $($FIND $1 -name *.xml); do
+for record in $($FIND $1 -name "*.xml" -type f -and ! -name ".*"); do
 	echo $record
 	# add the URIs to the temporary copy
 	$PYTHON ./addauths.py -nsar -o $TMP_OUT $record
