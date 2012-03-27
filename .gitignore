@@ -2,3 +2,5 @@
 .pydevproject
 .settings
 cache.db
+*.pyc
+tmp.xml
